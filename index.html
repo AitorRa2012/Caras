@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Detección de Caras con Emojis</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #f0f0f0;
+            padding: 20px;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        
+        .container {
+            display: flex;
+            width: 100%;
+            max-width: 1200px;
+            gap: 20px;
+            flex-direction: column;
+        }
+        
+        .video-container {
+            position: relative;
+            width: 100%;
+            max-width: 640px;
+            margin: 0 auto;
+        }
+        
+        #video {
+            width: 100%;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+        
+        .emoji {
+            position: absolute;
+            font-size: 40px;
+            pointer-events: none;
+            z-index: 10;
+        }
+        
+        .reference-image {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-top: 20px;
+        }
+        
+        #referenceImg {
+            max-width: 200px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            margin-bottom: 10px;
+        }
+        
+        .controls {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+        }
+        
+        button {
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        
+        button:hover {
+            background-color: #45a049;
+        }
+        
+        #loading {
+            margin-top: 20px;
+            font-weight: bold;
+        }
+        
+        #status {
+            margin-top: 10px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <h1>Detección de Caras con Emojis</h1>
+    
+    <div class="container">
+        <div class="video-container">
+            <video id="video" width="640" height="480" autoplay muted></video>
+        </div>
+        
+        <div class="reference-image">
+            <h3>Cara de referencia (mono)</h3>
+            <img id="referenceImg" src="image.png" alt="Cara de referencia" crossorigin="anonymous">
+            <p>Cuando detecte esta cara, mostrará un mono 🐵. Otras caras mostrarán conejos 🐰.</p>
+        </div>
+    </div>
+    
+    <div class="controls">
+        <button id="startBtn">Comenzar</button>
+        <button id="stopBtn" disabled>Detener</button>
+    </div>
+    
+    <div id="loading">Cargando modelos... ⏳</div>
+    <div id="status">Esperando para comenzar...</div>
+
+    <!-- Usamos face-api.js desde CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <script>
+        // Variables globales
+        const video = document.getElementById('video');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const referenceImg = document.getElementById('referenceImg');
+        const loadingText = document.getElementById('loading');
+        const statusText = document.getElementById('status');
+        
+        let referenceDescriptor = null;
+        let detectionInterval = null;
+        let modelsLoaded = false;
+        
+        // URLs de los modelos (usamos modelos pequeños para GitHub Pages)
+        const MODEL_URL = 'https://justadudewhohacks.github.io/face-api.js/models';
+        
+        // Cargar modelos de face-api.js
+        async function loadModels() {
+            try {
+                statusText.textContent = "Cargando modelos de detección facial...";
+                
+                // Cargamos solo los modelos necesarios para ahorrar ancho de banda
+                await Promise.all([
+                    faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+                    faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL),
+                    faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+                ]);
+                
+                statusText.textContent = "Modelos cargados. Obteniendo descriptor de referencia...";
+                
+                // Obtener descriptor de la imagen de referencia
+                const referenceDetection = await faceapi.detectSingleFace(referenceImg, 
+                    new faceapi.TinyFaceDetectorOptions())
+                    .withFaceLandmarks(true)
+                    .withFaceDescriptor();
+                
+                if (referenceDetection) {
+                    referenceDescriptor = referenceDetection.descriptor;
+                    loadingText.style.display = 'none';
+                    statusText.textContent = "¡Listo! Haz clic en 'Comenzar' para iniciar la cámara.";
+                    modelsLoaded = true;
+                    console.log("Modelos y descriptor de referencia cargados correctamente");
+                } else {
+                    throw new Error("No se pudo detectar cara en la imagen de referencia");
+                }
+            } catch (err) {
+                console.error("Error al cargar modelos:", err);
+                loadingText.textContent = "Error al cargar los modelos. Recarga la página.";
+                statusText.textContent = `Error: ${err.message}`;
+            }
+        }
+        
+        // Iniciar la cámara
+        async function startVideo() {
+            if (!modelsLoaded) {
+                statusText.textContent = "Los modelos aún no han terminado de cargar. Espera...";
+                return;
+            }
+            
+            try {
+                statusText.textContent = "Solicitando acceso a la cámara...";
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { width: 640, height: 480 } 
+                });
+                video.srcObject = stream;
+                
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                statusText.textContent = "Cámara activa. Detectando caras...";
+                
+                // Iniciar detección después de que el video esté listo
+                video.onloadedmetadata = () => {
+                    startDetection();
+                };
+            } catch (err) {
+                console.error("Error al acceder a la cámara:", err);
+                statusText.textContent = "Error al acceder a la cámara. Asegúrate de permitir el acceso.";
+            }
+        }
+        
+        // Detener la cámara
+        function stopVideo() {
+            const stream = video.srcObject;
+            const tracks = stream.getTracks();
+            
+            tracks.forEach(track => track.stop());
+            video.srcObject = null;
+            
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            
+            clearInterval(detectionInterval);
+            statusText.textContent = "Cámara detenida. Puedes comenzar de nuevo.";
+            
+            // Eliminar todos los emojis
+            document.querySelectorAll('.emoji').forEach(emoji => emoji.remove());
+        }
+        
+        // Comparar descriptores de caras
+        function isMatch(descriptor1, descriptor2, threshold = 0.5) {
+            return faceapi.euclideanDistance(descriptor1, descriptor2) < threshold;
+        }
+        
+        // Detección de caras en tiempo real
+        async function startDetection() {
+            // Limpiar intervalos anteriores
+            clearInterval(detectionInterval);
+            
+            // Configurar canvas para dibujar
+            const videoContainer = document.querySelector('.video-container');
+            const displaySize = { width: video.width, height: video.height };
+            faceapi.matchDimensions(videoContainer, displaySize);
+            
+            // Iniciar detección periódica
+            detectionInterval = setInterval(async () => {
+                // Eliminar emojis anteriores
+                document.querySelectorAll('.emoji').forEach(emoji => emoji.remove());
+                
+                try {
+                    // Detectar caras con el modelo pequeño para mejor rendimiento
+                    const detections = await faceapi.detectAllFaces(video, 
+                        new faceapi.TinyFaceDetectorOptions())
+                        .withFaceLandmarks(true)
+                        .withFaceDescriptors();
+                    
+                    // Redimensionar detecciones para que coincidan con el tamaño del video
+                    const resizedDetections = faceapi.resizeResults(detections, displaySize);
+                    
+                    // Procesar cada detección
+                    resizedDetections.forEach(detection => {
+                        const box = detection.detection.box;
+                        const descriptor = detection.descriptor;
+                        
+                        // Crear elemento emoji
+                        const emoji = document.createElement('div');
+                        emoji.className = 'emoji';
+                        
+                        // Determinar qué emoji mostrar
+                        if (referenceDescriptor && isMatch(descriptor, referenceDescriptor)) {
+                            emoji.textContent = '🐵'; // Mono
+                        } else {
+                            emoji.textContent = '🐰'; // Conejo
+                        }
+                        
+                        // Posicionar el emoji sobre la cara
+                        emoji.style.left = `${box.x + box.width/2 - 20}px`;
+                        emoji.style.top = `${box.y - 30}px`;
+                        
+                        // Agregar el emoji al contenedor
+                        videoContainer.appendChild(emoji);
+                    });
+                    
+                    // Actualizar estado
+                    if (resizedDetections.length > 0) {
+                        statusText.textContent = `Detectadas ${resizedDetections.length} cara(s)`;
+                    }
+                } catch (err) {
+                    console.error("Error en detección:", err);
+                    statusText.textContent = "Error en detección. Intenta recargar la página.";
+                }
+            }, 300); // Ejecutar cada 300ms para mejor rendimiento
+        }
+        
+        // Event listeners
+        startBtn.addEventListener('click', startVideo);
+        stopBtn.addEventListener('click', stopVideo);
+        
+        // Inicializar
+        window.addEventListener('load', async () => {
+            await loadModels();
+        });
+    </script>
+</body>
+  </html>
